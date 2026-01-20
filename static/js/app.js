@@ -84,7 +84,7 @@ async function deleteCaseWrapper(caseId) {
     }
 
     try {
-        await deleteCase(caseId); // From api.js
+        await apiDeleteCase(caseId); // From api.js
         if (window.showToast) window.showToast('Case deleted', 'success');
         await syncWithServer();
     } catch (error) {
@@ -99,6 +99,7 @@ window.triggerUpdate = triggerUpdate;
 window.deleteCase = deleteCaseWrapper;
 window.addCase = addCaseWrapper; // For UI to call
 window.scheduleCustomCheck = scheduleCustomCheck; // Direct exposure from api.js namespace
+window.getCaseProgress = getCaseProgress;
 
 // ==================== App Initialization ====================
 

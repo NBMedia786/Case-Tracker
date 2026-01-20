@@ -488,14 +488,196 @@ def remove_case(case_id):
 
 # ==================== Agent Trigger Endpoints ====================
 
+
+
+# Import global progress from agent (shared memory)
+from agent import PROGRESS
+
+@app.route('/api/progress/<int:case_id>', methods=['GET'])
+def get_progress(case_id):
+    """Get the real-time progress of a case research."""
+    progress = PROGRESS.get(case_id)
+    if not progress:
+        # If no progress found, check if it recently finished or hasn't started
+        # For now, return "idle" or "unknown"
+        return jsonify({"status": "idle", "percent": 0, "message": "Waiting..."})
+    
+    return jsonify(progress)
+
+
+def run_case_background_update(case_id):
+    """
+    The actual logic to run the agent, update DB, and send emails.
+    Run this in a separate thread.
+    """
+    # Create a new app context since we are in a thread
+    with app.app_context():
+        try:
+            # DB Connection
+            supabase = get_supabase_client()
+
+            # 1. Get the current (OLD) data
+            current_data = supabase.table("cases").select("*").eq("id", case_id).execute().data
+            if not current_data:
+                print(f"❌ Background Error: Case {case_id} not found")
+                return
+            
+            old_case = current_data[0]
+            case_name = old_case['case_name']
+            docket_url = old_case.get('docket_url')
+
+            # --- FIRST RUN DETECTION ---
+            is_first_run = False
+            if old_case.get('next_hearing_date') is None and old_case.get('last_hearing_date') is None:
+                is_first_run = True
+            if "Imported" in (old_case.get('notes') or ""):
+                is_first_run = True
+
+            # 2. Run the AI Agent (Searcher)
+            print(f"🔄 Processing case {case_id}: {case_name}")
+            
+            # Pass case_id for progress tracking
+            updated_info = agent.process_case(case_name, docket_url=docket_url, case_id=case_id)
+
+            # 3. Detect Changes
+            changes_detected = []
+            
+            # A. Check if it's the first run
+            if is_first_run:
+                changes_detected.append("🚀 Initial Research Complete (First Run)")
+
+            # B. Check Date Changes (ignore if both are None/Unknown)
+            new_next_date = updated_info.get('verdict', {}).get('next_hearing_date')
+            old_next_date = old_case.get('next_hearing_date')
+            
+            if new_next_date != old_next_date:
+                changes_detected.append(f"📅 Next Hearing: {new_next_date}")
+
+            # C. Check Status Change
+            new_status = updated_info.get('verdict', {}).get('case_status', 'Open')
+            if new_status != old_case.get('status'):
+                changes_detected.append(f"⚖️ Status Update: {new_status}")
+
+            # 4. Save to Database
+            verdict = updated_info.get('verdict', {})
+
+            # --- HELPER: Clean Dates for Database ---
+            def clean_date_for_db(date_str):
+                """Converts 'Unknown', empty strings, or None to Python None (SQL NULL)."""
+                if not date_str or str(date_str).lower() == 'unknown':
+                    return None
+                return date_str
+
+            data_to_save = {
+                "status": new_status,
+                "next_hearing_date": clean_date_for_db(verdict.get('next_hearing_date')),
+                "last_hearing_date": clean_date_for_db(verdict.get('last_hearing_date')),
+                "victim_name": verdict.get('victim_name'),
+                "suspect_name": verdict.get('suspect_name'),
+                "notes": verdict.get('notes'), 
+                "confidence": verdict.get('confidence', 'high'),
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }
+            
+            supabase.table("cases").update(data_to_save).eq("id", case_id).execute()
+
+            # 5. SEND EMAIL LOGIC
+            if changes_detected:
+                print(f"📧 Sending email for: {case_name}")
+                
+                email_subject = f"⚖️ Update: {case_name}"
+                if is_first_run:
+                    email_subject = f"🆕 New Case Analyzed: {case_name}"
+
+                # Professional HTML Email Template
+                updates_html = "".join([f"<li style='margin-bottom: 5px;'>{c}</li>" for c in changes_detected])
+                
+                # Format dates nicely (handle None)
+                next_date_display = data_to_save['next_hearing_date'] if data_to_save['next_hearing_date'] else '<span style="color:#999; font-style:italic;">None</span>'
+                last_date_display = data_to_save['last_hearing_date'] if data_to_save['last_hearing_date'] else '<span style="color:#999; font-style:italic;">Unknown</span>'
+                
+                # Status Color Logic
+                status_color = "#2563eb" # Blue for Open
+                if data_to_save['status'] == 'Closed': status_color = "#dc2626" # Red
+                if data_to_save['status'] == 'Verdict Reached': status_color = "#059669" # Green
+
+                email_body = f"""
+                <html>
+                <body style="font-family: 'Segoe UI', Arial, sans-serif; color: #333; line-height: 1.6; background-color: #f9fafb; padding: 20px;">
+                    
+                    <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 8px; border: 1px solid #e5e7eb; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+                        
+                        <div style="background-color: #0f172a; padding: 20px; text-align: center;">
+                            <h2 style="color: #ffffff; margin: 0; font-size: 20px;">Legal Case Update</h2>
+                        </div>
+
+                        <div style="padding: 30px;">
+                            
+                            <h1 style="color: #1e293b; font-size: 24px; margin-top: 0; margin-bottom: 5px;">{case_name}</h1>
+                            <p style="color: #64748b; font-size: 14px; margin-top: 0;">Automated Report</p>
+
+                            <table style="width: 100%; border-collapse: collapse; margin: 25px 0;">
+                                <tr>
+                                    <td style="padding: 10px 0; border-bottom: 1px solid #f1f5f9; color: #64748b; width: 40%;"><strong>Status</strong></td>
+                                    <td style="padding: 10px 0; border-bottom: 1px solid #f1f5f9; font-weight: bold; color: {status_color};">
+                                        {data_to_save['status']}
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td style="padding: 10px 0; border-bottom: 1px solid #f1f5f9; color: #64748b;"><strong>Next Hearing</strong></td>
+                                    <td style="padding: 10px 0; border-bottom: 1px solid #f1f5f9; font-weight: bold;">
+                                        {next_date_display}
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td style="padding: 10px 0; border-bottom: 1px solid #f1f5f9; color: #64748b;"><strong>Last Hearing</strong></td>
+                                    <td style="padding: 10px 0; border-bottom: 1px solid #f1f5f9;">
+                                        {last_date_display}
+                                    </td>
+                                </tr>
+                            </table>
+
+                            <div style="background-color: #f8fafc; padding: 15px; border-radius: 6px; border-left: 4px solid {status_color}; margin-bottom: 25px;">
+                                <strong style="color: #334155; display: block; margin-bottom: 10px;">Recent Changes:</strong>
+                                <ul style="margin: 0; padding-left: 20px; color: #475569;">
+                                    {updates_html}
+                                </ul>
+                            </div>
+
+                            <div>
+                                <strong style="color: #334155;">AI Analysis:</strong>
+                                <p style="background-color: #fff; border: 1px solid #e2e8f0; padding: 15px; border-radius: 6px; color: #475569; margin-top: 8px;">
+                                    {data_to_save['notes']}
+                                </p>
+                            </div>
+
+                        </div>
+                        
+                        <div style="background-color: #f1f5f9; padding: 15px; text-align: center; font-size: 12px; color: #94a3b8;">
+                            Generated by Legal Intelligence Dashboard • {datetime.now().strftime("%Y-%m-%d %H:%M")}
+                        </div>
+                    </div>
+                </body>
+                </html>
+                """
+                
+                # Send the mail
+                try:
+                     send_email_alert(email_subject, email_body)
+                except Exception as e:
+                     print(f"⚠️ Email failed: {e}")
+            else:
+                print("💤 No changes found. No email sent.")
+
+        except Exception as e:
+             print(f"❌ Background Process Error: {e}")
+
+
 @app.route('/api/trigger_update', methods=['POST'])
 @app.route('/api/trigger_update/<int:case_id>', methods=['POST'])
 def trigger_update(case_id=None):
     """
-    Triggers AI Research. 
-    Sends email if:
-    1. Data changed (Dates, Status).
-    2. It is the FIRST run (New case/Imported case).
+    Triggers AI Research (Async).
     """
     try:
         # DB Connection
@@ -508,161 +690,17 @@ def trigger_update(case_id=None):
                  return jsonify({"error": "case_id is required"}), 400
              case_id = data['case_id']
 
-        # 1. Get the current (OLD) data
-        current_data = supabase.table("cases").select("*").eq("id", case_id).execute().data
+        # Verify case exists
+        current_data = supabase.table("cases").select("id").eq("id", case_id).execute().data
         if not current_data:
             return jsonify({"error": "Case not found"}), 404
         
-        old_case = current_data[0]
-        case_name = old_case['case_name']
-        docket_url = old_case.get('docket_url')
+        # Start background thread
+        import threading
+        thread = threading.Thread(target=run_case_background_update, args=(case_id,))
+        thread.start()
 
-        # --- FIRST RUN DETECTION ---
-        # We check if the notes say "Imported" OR if the dates are empty (None)
-        is_first_run = False
-        if old_case.get('next_hearing_date') is None and old_case.get('last_hearing_date') is None:
-            is_first_run = True
-        if "Imported" in (old_case.get('notes') or ""):
-            is_first_run = True
-
-        # 2. Run the AI Agent (Searcher)
-        print(f"🔄 Processing case {case_id}: {case_name}")
-        # Using agent.process_case (aliased to research_case)
-        updated_info = agent.process_case(case_name, docket_url=docket_url)
-
-        # 3. Detect Changes
-        changes_detected = []
-        
-        # A. Check if it's the first run
-        if is_first_run:
-            changes_detected.append("🚀 Initial Research Complete (First Run)")
-
-        # B. Check Date Changes (ignore if both are None/Unknown)
-        new_next_date = updated_info.get('verdict', {}).get('next_hearing_date')
-        old_next_date = old_case.get('next_hearing_date')
-        
-        if new_next_date != old_next_date:
-            # Don't double count if it's first run, but good to list specific dates found
-            changes_detected.append(f"📅 Next Hearing: {new_next_date}")
-
-        # C. Check Status Change
-        new_status = updated_info.get('verdict', {}).get('case_status', 'Open')
-        if new_status != old_case.get('status'):
-            changes_detected.append(f"⚖️ Status Update: {new_status}")
-
-        # 4. Save to Database
-        verdict = updated_info.get('verdict', {})
-
-        # --- HELPER: Clean Dates for Database ---
-        def clean_date_for_db(date_str):
-            """Converts 'Unknown', empty strings, or None to Python None (SQL NULL)."""
-            if not date_str or str(date_str).lower() == 'unknown':
-                return None
-            return date_str
-
-        data_to_save = {
-            "status": new_status,
-            "next_hearing_date": clean_date_for_db(verdict.get('next_hearing_date')),
-            "last_hearing_date": clean_date_for_db(verdict.get('last_hearing_date')),
-            "victim_name": verdict.get('victim_name'),
-            "suspect_name": verdict.get('suspect_name'),
-            "notes": verdict.get('notes'), 
-            "confidence": verdict.get('confidence', 'high'),
-            "updated_at": datetime.now(timezone.utc).isoformat()
-        }
-        
-        supabase.table("cases").update(data_to_save).eq("id", case_id).execute()
-
-        # 5. SEND EMAIL LOGIC
-        if changes_detected:
-            print(f"📧 Sending email for: {case_name}")
-            
-            email_subject = f"⚖️ Update: {case_name}"
-            if is_first_run:
-                email_subject = f"🆕 New Case Analyzed: {case_name}"
-
-            # Professional HTML Email Template
-            updates_html = "".join([f"<li style='margin-bottom: 5px;'>{c}</li>" for c in changes_detected])
-            
-            # Format dates nicely (handle None)
-            next_date_display = data_to_save['next_hearing_date'] if data_to_save['next_hearing_date'] else '<span style="color:#999; font-style:italic;">None</span>'
-            last_date_display = data_to_save['last_hearing_date'] if data_to_save['last_hearing_date'] else '<span style="color:#999; font-style:italic;">Unknown</span>'
-            
-            # Status Color Logic
-            status_color = "#2563eb" # Blue for Open
-            if data_to_save['status'] == 'Closed': status_color = "#dc2626" # Red
-            if data_to_save['status'] == 'Verdict Reached': status_color = "#059669" # Green
-
-            email_body = f"""
-            <html>
-            <body style="font-family: 'Segoe UI', Arial, sans-serif; color: #333; line-height: 1.6; background-color: #f9fafb; padding: 20px;">
-                
-                <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 8px; border: 1px solid #e5e7eb; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
-                    
-                    <div style="background-color: #0f172a; padding: 20px; text-align: center;">
-                        <h2 style="color: #ffffff; margin: 0; font-size: 20px;">Legal Case Update</h2>
-                    </div>
-
-                    <div style="padding: 30px;">
-                        
-                        <h1 style="color: #1e293b; font-size: 24px; margin-top: 0; margin-bottom: 5px;">{case_name}</h1>
-                        <p style="color: #64748b; font-size: 14px; margin-top: 0;">Automated Report</p>
-
-                        <table style="width: 100%; border-collapse: collapse; margin: 25px 0;">
-                            <tr>
-                                <td style="padding: 10px 0; border-bottom: 1px solid #f1f5f9; color: #64748b; width: 40%;"><strong>Status</strong></td>
-                                <td style="padding: 10px 0; border-bottom: 1px solid #f1f5f9; font-weight: bold; color: {status_color};">
-                                    {data_to_save['status']}
-                                </td>
-                            </tr>
-                            <tr>
-                                <td style="padding: 10px 0; border-bottom: 1px solid #f1f5f9; color: #64748b;"><strong>Next Hearing</strong></td>
-                                <td style="padding: 10px 0; border-bottom: 1px solid #f1f5f9; font-weight: bold;">
-                                    {next_date_display}
-                                </td>
-                            </tr>
-                            <tr>
-                                <td style="padding: 10px 0; border-bottom: 1px solid #f1f5f9; color: #64748b;"><strong>Last Hearing</strong></td>
-                                <td style="padding: 10px 0; border-bottom: 1px solid #f1f5f9;">
-                                    {last_date_display}
-                                </td>
-                            </tr>
-                        </table>
-
-                        <div style="background-color: #f8fafc; padding: 15px; border-radius: 6px; border-left: 4px solid {status_color}; margin-bottom: 25px;">
-                            <strong style="color: #334155; display: block; margin-bottom: 10px;">Recent Changes:</strong>
-                            <ul style="margin: 0; padding-left: 20px; color: #475569;">
-                                {updates_html}
-                            </ul>
-                        </div>
-
-                        <div>
-                            <strong style="color: #334155;">AI Analysis:</strong>
-                            <p style="background-color: #fff; border: 1px solid #e2e8f0; padding: 15px; border-radius: 6px; color: #475569; margin-top: 8px;">
-                                {data_to_save['notes']}
-                            </p>
-                        </div>
-
-                    </div>
-                    
-                    <div style="background-color: #f1f5f9; padding: 15px; text-align: center; font-size: 12px; color: #94a3b8;">
-                        Generated by Legal Intelligence Dashboard • {datetime.now().strftime("%Y-%m-%d %H:%M")}
-                    </div>
-                </div>
-            </body>
-            </html>
-            """
-            
-            # Send the mail
-            try:
-                 send_email_alert(email_subject, email_body)
-            except Exception as e:
-                 print(f"⚠️ Email failed: {e}")
-            
-            return jsonify({"success": True, "message": "Updated & Email Sent!"}), 200
-        else:
-            print("💤 No changes found. No email sent.")
-            return jsonify({"success": True, "message": "Checked, no updates."}), 200
+        return jsonify({"success": True, "message": "Research started in background"}), 202
 
     except Exception as e:
         print(f"❌ Error: {e}")

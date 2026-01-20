@@ -38,6 +38,7 @@ class AgentState(TypedDict):
     final_verdict: dict
     search_results: str
     error_message: str
+    case_id: Optional[int]
 
 
 # ==================== LLM Initialization ====================
@@ -58,6 +59,21 @@ def get_gemini_llm():
 
 # ==================== Node Functions ====================
 
+# Global Progress Tracker
+PROGRESS = {}
+
+def update_progress(case_id, step, percent, message):
+    """Update the progress for a specific case."""
+    if case_id:
+        PROGRESS[case_id] = {
+            "step": step,
+            "percent": percent,
+            "message": message,
+            "status": "processing"
+        }
+
+
+
 def node_search(state: AgentState) -> AgentState:
     """
     Hybrid Search Node:
@@ -65,12 +81,16 @@ def node_search(state: AgentState) -> AgentState:
     - Attempt 1+: If Docket failed or missing, use Google Search.
     """
     case_name = state["case_name"]
+    case_id = state.get("case_id")  # Get case_id from state
     docket_url = state.get("docket_url")
     search_attempts = state.get("search_attempts", 0)
+
+    update_progress(case_id, "search", 20 + (search_attempts * 10), f"Searching: Attempt {search_attempts + 1}")
 
     # --- STRATEGY 1: DIRECT DOCKET SCRAPE (Attempt 0) ---
     if search_attempts == 0 and docket_url:
         print(f"🔗 Checking Official Docket URL: {docket_url}")
+        update_progress(case_id, "search", 25, "Accessing Official Docket...")
         try:
             # Use God Mode directly on the target
             scraped_content = scrape_with_god_mode(docket_url)
@@ -95,6 +115,7 @@ def node_search(state: AgentState) -> AgentState:
     # --- STRATEGY 2: GOOGLE SEARCH (Fallback) ---
     # If we are here, either Docket URL was missing, failed, or we are on retry loops
     try:
+        update_progress(case_id, "search", 30 + (search_attempts * 10), "Running Google Search...")
         if search_attempts == 0:
             query = f"latest court hearing {case_name}"
         elif search_attempts == 1:
@@ -107,6 +128,8 @@ def node_search(state: AgentState) -> AgentState:
         # Perform search
         search_results = search_web.invoke({"query": query})
         
+        update_progress(case_id, "search", 40 + (search_attempts * 10), "Scanning Search Results...")
+
         # Get URLs and scrape content
         urls = get_search_urls(query)
         scraped_data = ""
@@ -114,7 +137,8 @@ def node_search(state: AgentState) -> AgentState:
         if urls:
             # Scrape top 2 to save time if falling back
             scraped_parts = []
-            for search_url in urls[:2]:
+            for i, search_url in enumerate(urls[:2]):
+                update_progress(case_id, "search", 45 + (i * 5) + (search_attempts * 10), f"Reading Source {i+1}...")
                 print(f"🚀 Engaging God Mode (Searcher) for: {search_url}")
                 page_content = scrape_with_god_mode(search_url)
                 
@@ -150,19 +174,14 @@ def node_search(state: AgentState) -> AgentState:
 def node_analyze(state: AgentState) -> AgentState:
     """
     Analyze node: Feeds scraped data to Gemini 2.5 Pro for information extraction.
-    
-    Extracts:
-    - Next Hearing Date
-    - Last Hearing Date
-    - Case Status
-    - Victim/Suspect names
-    
-    Returns a structured JSON response.
     """
     case_name = state["case_name"]
+    case_id = state.get("case_id")
     scraped_data = state.get("scraped_data", "")
     search_results = state.get("search_results", "")
     
+    update_progress(case_id, "analyze", 70, "Analyzing Legal Data (Gemini)...")
+
     current_date = datetime.now().strftime("%Y-%m-%d")
     
     if not scraped_data and not search_results:
@@ -255,6 +274,8 @@ def node_analyze(state: AgentState) -> AgentState:
         
         print(f"📋 Analysis complete: {json.dumps(verdict, indent=2)}")
         
+        update_progress(case_id, "analyze", 90, "Finalizing Verdict...")
+
         return {
             **state,
             "final_verdict": verdict,
@@ -282,11 +303,6 @@ def node_analyze(state: AgentState) -> AgentState:
 def node_decision(state: AgentState) -> Literal["node_search", "end"]:
     """
     Decision node: Determines whether to continue searching or end.
-    
-    Logic:
-    - If Gemini finds a valid future date -> Go to END
-    - If Gemini says 'Unknown' AND search_attempts < 2 -> Loop back to node_search
-    - If search_attempts >= 2 -> Go to END (mark as 'Manual Review')
     """
     verdict = state.get("final_verdict", {})
     search_attempts = state.get("search_attempts", 0)
@@ -329,55 +345,26 @@ def node_decision(state: AgentState) -> Literal["node_search", "end"]:
 # ==================== Graph Construction ====================
 
 def build_research_agent():
-    """
-    Build and compile the LangGraph research agent.
-    
-    Returns:
-        A compiled LangGraph application.
-    """
-    # Create the graph
+    """Build and compile the LangGraph research agent."""
     workflow = StateGraph(AgentState)
-    
-    # Add nodes
     workflow.add_node("node_search", node_search)
     workflow.add_node("node_analyze", node_analyze)
-    
-    # Set entry point
     workflow.set_entry_point("node_search")
-    
-    # Add edges
     workflow.add_edge("node_search", "node_analyze")
-    
-    # Add conditional edge from analyze to either search or end
-    workflow.add_conditional_edges(
-        "node_analyze",
-        node_decision,
-        {
+    workflow.add_conditional_edges("node_analyze", node_decision, {
             "node_search": "node_search",
             "end": END
-        }
-    )
-    
-    # Compile the graph
+        })
     return workflow.compile()
 
-
-# Create the compiled research agent
 research_agent = build_research_agent()
 
 
 # ==================== Public API ====================
 
-def research_case(case_name: str, docket_url: Optional[str] = None) -> dict:
+def research_case(case_name: str, docket_url: Optional[str] = None, case_id: Optional[int] = None) -> dict:
     """
     Research a legal case using the autonomous agent.
-    
-    Args:
-        case_name: The name of the legal case to research.
-        docket_url: Optional URL of the official docket to check first.
-    
-    Returns:
-        A dictionary containing the research results.
     """
     print(f"\n{'='*60}")
     print(f"🔎 Starting research for case: {case_name}")
@@ -385,9 +372,13 @@ def research_case(case_name: str, docket_url: Optional[str] = None) -> dict:
         print(f"🔗 Docket URL provided: {docket_url}")
     print(f"{'='*60}\n")
     
+    # Initialize Progress
+    update_progress(case_id, "start", 5, "Initializing Agent...")
+
     initial_state: AgentState = {
         "case_name": case_name,
         "docket_url": docket_url,
+        "case_id": case_id,             # Pass ID to state 
         "search_attempts": 0,
         "scraped_data": "",
         "final_verdict": {},
@@ -398,6 +389,8 @@ def research_case(case_name: str, docket_url: Optional[str] = None) -> dict:
     # Run the agent
     final_state = research_agent.invoke(initial_state)
     
+    update_progress(case_id, "complete", 100, "Research Complete!")
+
     print(f"\n{'='*60}")
     print("✅ Research complete!")
     print(f"{'='*60}\n")
@@ -430,6 +423,5 @@ if __name__ == "__main__":
     print(json.dumps(result, indent=2, default=str))
 
 # Alias for compatibility
-# Alias for compatibility
-def process_case(case_name, docket_url=None):
-    return research_case(case_name, docket_url)
+def process_case(case_name, docket_url=None, case_id=None):
+    return research_case(case_name, docket_url, case_id)

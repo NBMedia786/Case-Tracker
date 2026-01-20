@@ -1,9 +1,4 @@
-/**
- * Legal Case Tracker - API Client
- * Handles all communication with the Flask backend.
- */
-
-const API_BASE_URL = 'http://localhost:5000/api';
+const API_BASE_URL = '/api';
 
 /**
  * Fetch all cases from the server.
@@ -92,7 +87,7 @@ async function updateCase(caseId, updateData) {
  * @param {number} caseId - The case ID
  * @returns {Promise<boolean>} True if successful
  */
-async function deleteCase(caseId) {
+async function apiDeleteCase(caseId) {
     const response = await fetch(`${API_BASE_URL}/cases/${caseId}`, {
         method: 'DELETE'
     });
@@ -180,6 +175,17 @@ async function scheduleCustomCheck(caseIds, runTime) {
     return result;
 }
 
+/**
+ * Get the real-time progress for a case.
+ * @param {number} caseId - The case ID
+ * @returns {Promise<Object>} Progress object { step, percent, message, status }
+ */
+async function getCaseProgress(caseId) {
+    const response = await fetch(`${API_BASE_URL}/progress/${caseId}`);
+    const result = await response.json();
+    return result;
+}
+
 // Export for use in other modules
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
@@ -187,11 +193,12 @@ if (typeof module !== 'undefined' && module.exports) {
         getCaseById,
         addCase,
         updateCase,
-        deleteCase,
+        deleteCase: apiDeleteCase,
         triggerResearch,
         triggerAllResearch,
         getSchedulerStatus,
         scheduleCustomCheck,
+        getCaseProgress,
         API_BASE_URL
     };
 }

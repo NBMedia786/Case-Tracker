@@ -126,22 +126,86 @@ function createCaseRow(c) {
 }
 
 // Wrapper to show loading state on the refresh icon
+// Wrapper to show loading state on the refresh icon with Progress Bar
 async function triggerUpdateWrapper(id, btnElement) {
+    // Prevent double clicks
+    if (btnElement.disabled) return;
+
     btnElement.disabled = true;
-    const originalContent = btnElement.innerHTML;
-    btnElement.innerHTML = '⏳';
-    btnElement.style.opacity = '0.7';
+    const parentTd = btnElement.closest('td');
+    const originalContent = parentTd.innerHTML; // Save entire cell content to restore later if needed
+
+    // Create Progress UI
+    const progressId = `progress-${id}`;
+    parentTd.innerHTML = `
+        <div class="progress-container" style="width: 120px; text-align: center;">
+            <div style="background-color: #e2e8f0; border-radius: 4px; height: 6px; width: 100%; overflow: hidden; margin-bottom: 4px;">
+                <div id="${progressId}-bar" style="background-color: var(--accent-blue); height: 100%; width: 0%; transition: width 0.5s ease;"></div>
+            </div>
+            <div id="${progressId}-text" style="font-size: 10px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Starting...</div>
+        </div>
+    `;
 
     try {
-        await window.triggerUpdate(id);
+        // Trigger the background job directly via API (bypassing app.js wrapper that forces refresh)
+        // This prevents the table from re-rendering and killing our progress bar
+        if (typeof window.triggerResearch === 'function') {
+            await window.triggerResearch(id);
+        } else if (typeof triggerResearch === 'function') {
+            await triggerResearch(id);
+        } else {
+            // Fallback fetch if function missing
+            await fetch(`/api/trigger_update/${id}`, { method: 'POST' });
+        }
+
+        // Start Polling
+        const intervalId = setInterval(async () => {
+            try {
+                // We use the globally exposed api function if available, else fetch directly
+                // Assuming api.js exposes getCaseProgress via window or we can fetch manually
+                let progress;
+                if (typeof window.getCaseProgress === 'function') {
+                    progress = await window.getCaseProgress(id);
+                } else if (typeof getCaseProgress === 'function') {
+                    progress = await getCaseProgress(id);
+                } else {
+                    // Fallback manual fetch if api.js binding is weird
+                    const res = await fetch(`/api/progress/${id}`);
+                    progress = await res.json();
+                }
+
+                // Update UI
+                const bar = document.getElementById(`${progressId}-bar`);
+                const text = document.getElementById(`${progressId}-text`);
+
+                if (bar && text) {
+                    const percent = progress.percent || 0;
+                    bar.style.width = `${percent}%`;
+                    text.innerText = progress.message ? `(${percent}%) ${progress.message}` : `${percent}%`;
+
+                    // Completion Check
+                    if (percent >= 100 || progress.status === 'complete') {
+                        clearInterval(intervalId);
+                        text.innerText = "Done!";
+                        setTimeout(async () => {
+                            await window.syncWithServer(); // Refresh row to show new data
+                        }, 1000);
+                    }
+                } else {
+                    // Element lost (e.g. page refresh), stop polling
+                    clearInterval(intervalId);
+                }
+
+            } catch (e) {
+                console.error("Progress poll error", e);
+                // Don't clear interval immediately on transient network error, but maybe after X fails
+            }
+        }, 1000); // Poll every second
+
     } catch (e) {
         console.error(e);
-    } finally {
-        // We expect renderCases to refresh the row via syncWithServer, 
-        // but restoring state handles cases where it might fail or lag.
-        btnElement.disabled = false;
-        btnElement.innerHTML = '🔄';
-        btnElement.style.opacity = '1';
+        parentTd.innerHTML = `<span style="color:red; font-size:12px;">Error</span>`;
+        setTimeout(() => window.syncWithServer(), 2000);
     }
 }
 
