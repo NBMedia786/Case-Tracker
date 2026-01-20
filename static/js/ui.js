@@ -36,11 +36,19 @@ function renderCases(cases) {
     cases.forEach(c => {
         tbody.appendChild(createCaseRow(c));
     });
+
+    // Resume Progress for active cases
+    cases.forEach(c => {
+        if (c.processing_status === 'processing') {
+            resumeProgressWrapper(c.id);
+        }
+    });
 }
 
 // Helper to create a single professional row
 function createCaseRow(c) {
     const row = document.createElement('tr');
+    row.id = `row-${c.id}`; // Add ID for easy access
 
     // --- 1. Status Logic ---
     const status = (c.status || 'Open').toLowerCase();
@@ -111,7 +119,7 @@ function createCaseRow(c) {
         
         <td>${statusBadge}</td>
         
-        <td>
+        <td class="action-cell">
             <div style="display:flex; gap: 8px;">
                 <button onclick="triggerUpdateWrapper(${c.id}, this)" class="action-icon-btn" title="Run AI Research">
                    🔄
@@ -125,88 +133,106 @@ function createCaseRow(c) {
     return row;
 }
 
-// Wrapper to show loading state on the refresh icon
-// Wrapper to show loading state on the refresh icon with Progress Bar
+// Wrapper to resume progress on page load
+function resumeProgressWrapper(id) {
+    const row = document.getElementById(`row-${id}`);
+    if (!row) return;
+
+    const actionCell = row.querySelector('.action-cell');
+    if (!actionCell) return;
+
+    // Replace content with progress bar
+    renderProgressUI(actionCell, id, 0, "Resuming...");
+    startProgressPolling(id, actionCell);
+}
+
+// Wrapper to show loading state on click
 async function triggerUpdateWrapper(id, btnElement) {
-    // Prevent double clicks
     if (btnElement.disabled) return;
-
     btnElement.disabled = true;
-    const parentTd = btnElement.closest('td');
-    const originalContent = parentTd.innerHTML; // Save entire cell content to restore later if needed
 
-    // Create Progress UI
-    const progressId = `progress-${id}`;
-    parentTd.innerHTML = `
-        <div class="progress-container" style="width: 120px; text-align: center;">
-            <div style="background-color: #e2e8f0; border-radius: 4px; height: 6px; width: 100%; overflow: hidden; margin-bottom: 4px;">
-                <div id="${progressId}-bar" style="background-color: var(--accent-blue); height: 100%; width: 0%; transition: width 0.5s ease;"></div>
-            </div>
-            <div id="${progressId}-text" style="font-size: 10px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Starting...</div>
-        </div>
-    `;
+    const parentTd = btnElement.closest('td');
+
+    // 1. Initial UI
+    renderProgressUI(parentTd, id, 0, "Starting...");
 
     try {
-        // Trigger the background job directly via API (bypassing app.js wrapper that forces refresh)
-        // This prevents the table from re-rendering and killing our progress bar
+        // 2. Trigger API
         if (typeof window.triggerResearch === 'function') {
             await window.triggerResearch(id);
         } else if (typeof triggerResearch === 'function') {
             await triggerResearch(id);
         } else {
-            // Fallback fetch if function missing
             await fetch(`/api/trigger_update/${id}`, { method: 'POST' });
         }
 
-        // Start Polling
-        const intervalId = setInterval(async () => {
-            try {
-                // We use the globally exposed api function if available, else fetch directly
-                // Assuming api.js exposes getCaseProgress via window or we can fetch manually
-                let progress;
-                if (typeof window.getCaseProgress === 'function') {
-                    progress = await window.getCaseProgress(id);
-                } else if (typeof getCaseProgress === 'function') {
-                    progress = await getCaseProgress(id);
-                } else {
-                    // Fallback manual fetch if api.js binding is weird
-                    const res = await fetch(`/api/progress/${id}`);
-                    progress = await res.json();
-                }
-
-                // Update UI
-                const bar = document.getElementById(`${progressId}-bar`);
-                const text = document.getElementById(`${progressId}-text`);
-
-                if (bar && text) {
-                    const percent = progress.percent || 0;
-                    bar.style.width = `${percent}%`;
-                    text.innerText = progress.message ? `(${percent}%) ${progress.message}` : `${percent}%`;
-
-                    // Completion Check
-                    if (percent >= 100 || progress.status === 'complete') {
-                        clearInterval(intervalId);
-                        text.innerText = "Done!";
-                        setTimeout(async () => {
-                            await window.syncWithServer(); // Refresh row to show new data
-                        }, 1000);
-                    }
-                } else {
-                    // Element lost (e.g. page refresh), stop polling
-                    clearInterval(intervalId);
-                }
-
-            } catch (e) {
-                console.error("Progress poll error", e);
-                // Don't clear interval immediately on transient network error, but maybe after X fails
-            }
-        }, 1000); // Poll every second
+        // 3. Start Polling
+        startProgressPolling(id, parentTd);
 
     } catch (e) {
         console.error(e);
         parentTd.innerHTML = `<span style="color:red; font-size:12px;">Error</span>`;
         setTimeout(() => window.syncWithServer(), 2000);
     }
+}
+
+// Helper: Render the Progress Bar HTML
+function renderProgressUI(container, id, percent, message) {
+    const progressId = `progress-${id}`;
+    container.innerHTML = `
+        <div class="progress-container" style="width: 120px; text-align: center;">
+            <div style="background-color: #e2e8f0; border-radius: 4px; height: 6px; width: 100%; overflow: hidden; margin-bottom: 4px;">
+                <div id="${progressId}-bar" style="background-color: var(--accent-blue); height: 100%; width: ${percent}%; transition: width 0.5s ease;"></div>
+            </div>
+            <div id="${progressId}-text" style="font-size: 10px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${message}</div>
+        </div>
+    `;
+}
+
+// Helper: Poll Logic
+function startProgressPolling(id, container) {
+    const progressId = `progress-${id}`;
+
+    const intervalId = setInterval(async () => {
+        try {
+            // Fetch/Get status
+            let progress;
+            if (typeof window.getCaseProgress === 'function') {
+                progress = await window.getCaseProgress(id);
+            } else if (typeof getCaseProgress === 'function') {
+                progress = await getCaseProgress(id);
+            } else {
+                const res = await fetch(`/api/progress/${id}`);
+                progress = await res.json();
+            }
+
+            // Update UI
+            const bar = document.getElementById(`${progressId}-bar`);
+            const text = document.getElementById(`${progressId}-text`);
+
+            if (bar && text) {
+                const percent = progress.percent || 0;
+                bar.style.width = `${percent}%`;
+                // If resuming, we might have a message from DB
+                text.innerText = progress.message ? `(${percent}%) ${progress.message}` : `${percent}%`;
+
+                // Completion
+                if (percent >= 100 || progress.status === 'complete') {
+                    clearInterval(intervalId);
+                    text.innerText = "Done!";
+                    setTimeout(async () => {
+                        await window.syncWithServer();
+                    }, 1000);
+                }
+            } else {
+                // Element lost
+                clearInterval(intervalId);
+            }
+
+        } catch (e) {
+            console.error("Progress poll error", e);
+        }
+    }, 1000);
 }
 
 // ===========================

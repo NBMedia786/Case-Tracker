@@ -125,81 +125,166 @@ def send_case_status_alert(case: dict, new_status: str, verdict: dict):
 
 # ==================== Background Scheduler Logic ====================
 
-def process_case_update(case: dict) -> dict:
+def process_case_update(case: dict, return_alert_only=False) -> dict:
     """
     Run the research agent for a case and update the database.
     
     Args:
         case: The case dictionary from Supabase.
+        return_alert_only: If True, returns alert data instead of sending email.
     
     Returns:
-        The research result.
+        The research result or alert data.
     """
     case_id = case['id']
     case_name = case['case_name']
+    docket_url = case.get('docket_url')
     old_status = case.get('status', 'Open')
-    
+    old_next_date = case.get('next_hearing_date')
+
     print(f"🔄 Processing case {case_id}: {case_name}")
     
     try:
         # Run the research agent
-        result = research_case(case_name)
+        # Pass case_id for progress tracking
+        result = agent.process_case(case_name, docket_url=docket_url, case_id=case_id)
         verdict = result.get('verdict', {})
         
-        # Prepare update data
+        # --- DETECT CHANGES ---
+        changes = []
+        
+        # Check Status Change
+        new_status = verdict.get('case_status', 'Unknown')
+        if new_status not in ['Unknown', 'Pending'] and new_status != old_status:
+            changes.append(f"Status: {old_status} -> {new_status}")
+            
+        # Check Date Change
+        new_next_date = verdict.get('next_hearing_date')
+        if new_next_date and new_next_date != 'Unknown' and new_next_date != old_next_date:
+            changes.append(f"Next Hearing: {new_next_date}")
+            
+        # Prepare valid update data for DB
+        def clean_val(v): return None if not v or str(v).lower() == 'unknown' else v
+        
         update_data = {
-            'last_checked_date': datetime.utcnow().isoformat(),
-            'notes': verdict.get('notes', '')
+            'last_checked_date': datetime.now(timezone.utc).isoformat(),
+            'notes': verdict.get('notes', ''),
+            'confidence': verdict.get('confidence', 'high')
         }
         
-        # Update next hearing date if found
-        next_hearing = verdict.get('next_hearing_date')
-        if next_hearing and next_hearing != 'Unknown':
-            update_data['next_hearing_date'] = next_hearing
-        
-        # Update victim/suspect names if found
-        if verdict.get('victim_name') and verdict.get('victim_name') != 'Unknown':
-            update_data['victim_name'] = verdict.get('victim_name')
-        
-        if verdict.get('suspect_name') and verdict.get('suspect_name') != 'Unknown':
-            update_data['suspect_name'] = verdict.get('suspect_name')
-        
-        # Update status if determined
-        new_status = verdict.get('case_status')
-        if new_status and new_status not in ['Unknown', 'Pending']:
-            update_data['status'] = new_status
+        if new_next_date and new_next_date != 'Unknown':
+            update_data['next_hearing_date'] = new_next_date
             
-            # Send email alert if status changed to Closed or Verdict Reached
-            if new_status in ['Closed', 'Verdict Reached'] and old_status != new_status:
-                send_case_status_alert(case, new_status, verdict)
-        
+        if clean_val(verdict.get('victim_name')):
+            update_data['victim_name'] = verdict.get('victim_name')
+            
+        if clean_val(verdict.get('suspect_name')):
+            update_data['suspect_name'] = verdict.get('suspect_name')
+
+        if new_status not in ['Unknown', 'Pending']:
+            update_data['status'] = new_status
+
+        if clean_val(verdict.get('last_hearing_date')):
+            update_data['last_hearing_date'] = verdict.get('last_hearing_date')
+
         # Update the case in Supabase
         update_case(case_id, update_data)
-        
         print(f"✅ Case {case_id} updated successfully")
-        return result
+
+        # --- ALERT GENERATION ---
+        # Only generate alert if there are meaningful changes
+        alert_data = None
+        if changes or new_status in ['Closed', 'Verdict Reached']:
+             alert_data = {
+                 'case_name': case_name,
+                 'status': update_data.get('status', old_status),
+                 'changes': changes,
+                 'next_hearing': update_data.get('next_hearing_date', 'N/A'),
+                 'notes': update_data.get('notes', '')
+             }
+
+        if return_alert_only:
+            return alert_data
+        else:
+            # Legacy immediate email behavior (if needed)
+            if alert_data and (new_status in ['Closed', 'Verdict Reached'] and old_status != new_status):
+                send_case_status_alert(case, new_status, verdict)
+            return result
     
     except Exception as e:
         print(f"❌ Error processing case {case_id}: {e}")
         return {'error': str(e)}
 
 
+def send_daily_summary_email(summary_report):
+    """
+    Sends a single email checking all updates from the daily run.
+    """
+    if not summary_report:
+        return
+
+    count = len(summary_report)
+    subject = f"daily Summary: {count} Cases Updated"
+    
+    # Build Table Rows
+    rows_html = ""
+    for item in summary_report:
+        changes_str = "<br>".join([f"• {c}" for c in item['changes']])
+        status_color = "#2563eb"
+        if item['status'] == 'Closed': status_color = "#dc2626"
+        if item['status'] == 'Verdict Reached': status_color = "#059669"
+        
+        rows_html += f"""
+        <tr style="border-bottom: 1px solid #eee;">
+            <td style="padding: 12px; font-weight: bold;">{item['case_name']}</td>
+            <td style="padding: 12px; color: {status_color}; text-transform: uppercase; font-size: 12px; font-weight: bold;">{item['status']}</td>
+            <td style="padding: 12px;">{changes_str}</td>
+            <td style="padding: 12px; color: #555;">{item['next_hearing']}</td>
+        </tr>
+        """
+
+    body = f"""
+    <html>
+    <body style="font-family: Arial, sans-serif; padding: 20px; background-color: #f9fafb;">
+        <div style="max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; border: 1px solid #ddd;">
+            <h2 style="color: #1a202c; border-bottom: 2px solid #3182ce; padding-bottom: 10px;">Daily Research Summary</h2>
+            <p>The automated agent researched your active cases. Here are the updates:</p>
+            
+            <table style="width: 100%; border-collapse: collapse; margin-top: 20px;">
+                <thead>
+                    <tr style="background-color: #f7fafc; text-align: left;">
+                        <th style="padding: 12px; border-bottom: 2px solid #edf2f7;">Case Name</th>
+                        <th style="padding: 12px; border-bottom: 2px solid #edf2f7;">Status</th>
+                        <th style="padding: 12px; border-bottom: 2px solid #edf2f7;">Changes</th>
+                        <th style="padding: 12px; border-bottom: 2px solid #edf2f7;">Next Hearing</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows_html}
+                </tbody>
+            </table>
+            
+            <p style="margin-top: 30px; font-size: 12px; color: #718096; text-align: center;">Generated by Legal Case Tracker AI</p>
+        </div>
+    </body>
+    </html>
+    """
+    
+    send_email_alert(subject, body)
+
+
 def scheduled_case_check():
     """
     Background job that runs every 24 hours to check and update cases.
-    
-    Logic:
-    - Query all 'Open' cases
-    - If next_hearing_date > 30 days away: SKIP
-    - If next_hearing_date < 7 days away: RUN agent
-    - If next_hearing_date is None/Unknown: RUN agent
-    - If status is 'Closed': SKIP
+    BATCHES emails into one daily summary.
     """
     print("\n" + "=" * 60)
     print("🕐 Running scheduled case check...")
     print(f"   Time: {datetime.now().isoformat()}")
     print("=" * 60 + "\n")
     
+    summary_report = []
+
     try:
         # Get all open cases
         open_cases = get_cases_by_status('Open')
@@ -219,22 +304,17 @@ def scheduled_case_check():
             next_hearing = case.get('next_hearing_date')
             status = case.get('status', 'Open')
             
-            # Skip closed cases (shouldn't be in the list, but just in case)
+            # Skip closed cases
             if status == 'Closed':
-                print(f"⏭️ Skipping closed case: {case_name}")
                 cases_skipped += 1
                 continue
             
-            # Determine if we should run the agent
+            # Logic to decide if we run (Same as before)
             should_run = False
-            reason = ""
-            
             if next_hearing is None:
                 should_run = True
-                reason = "No hearing date set"
             else:
                 try:
-                    # Parse the hearing date
                     if isinstance(next_hearing, str):
                         hearing_date = datetime.strptime(next_hearing, "%Y-%m-%d").date()
                     else:
@@ -242,35 +322,32 @@ def scheduled_case_check():
                     
                     days_until_hearing = (hearing_date - today).days
                     
-                    if days_until_hearing < 0:
-                        # Hearing date is in the past
+                    if days_until_hearing < 0 or days_until_hearing <= 7:
                         should_run = True
-                        reason = f"Hearing date passed ({next_hearing})"
-                    elif days_until_hearing <= 7:
-                        # Within 7 days
-                        should_run = True
-                        reason = f"Hearing in {days_until_hearing} days"
                     elif days_until_hearing > 30:
-                        # More than 30 days away
                         should_run = False
-                        reason = f"Hearing > 30 days away ({days_until_hearing} days)"
-                    else:
-                        # Between 7 and 30 days
-                        should_run = False
-                        reason = f"Hearing in {days_until_hearing} days (between 7-30)"
-                
-                except (ValueError, TypeError) as e:
+                except Exception:
                     should_run = True
-                    reason = f"Could not parse hearing date: {next_hearing}"
             
             if should_run:
-                print(f"🔍 Running agent for: {case_name} ({reason})")
-                process_case_update(case)
+                print(f"🔍 Running agent for: {case_name}")
+                # Call update with return_alert_only=True
+                alert_data = process_case_update(case, return_alert_only=True)
+                
+                if alert_data:
+                    summary_report.append(alert_data)
+                    
                 cases_processed += 1
             else:
-                print(f"⏭️ Skipping: {case_name} ({reason})")
                 cases_skipped += 1
         
+        # --- SEND DAILY SUMMARY ---
+        if summary_report:
+            print(f"📧 Sending Daily Summary for {len(summary_report)} cases...")
+            send_daily_summary_email(summary_report)
+        else:
+            print("💤 No significant updates found. No email sent.")
+
         print(f"\n📊 Scheduled check complete: {cases_processed} processed, {cases_skipped} skipped")
     
     except Exception as e:
@@ -495,14 +572,36 @@ from agent import PROGRESS
 
 @app.route('/api/progress/<int:case_id>', methods=['GET'])
 def get_progress(case_id):
-    """Get the real-time progress of a case research."""
+    """
+    Get the real-time progress of a case research.
+     checks Memory first (fastest), then DB (persistence).
+    """
+    # 1. Try Memory
     progress = PROGRESS.get(case_id)
-    if not progress:
-        # If no progress found, check if it recently finished or hasn't started
-        # For now, return "idle" or "unknown"
-        return jsonify({"status": "idle", "percent": 0, "message": "Waiting..."})
+    if progress:
+        return jsonify(progress)
     
-    return jsonify(progress)
+    # 2. Try DB (if memory was wiped due to restart)
+    try:
+        case = get_case_by_id(case_id)
+        if case and case.get('processing_status') == 'processing':
+            return jsonify({
+                 "status": case.get('processing_status'),
+                 "percent": case.get('progress_percent', 0),
+                 "message": case.get('progress_message', 'Resuming...')
+            })
+        elif case and case.get('processing_status') == 'complete':
+             return jsonify({
+                 "status": "complete",
+                 "percent": 100,
+                 "message": "Complete"
+            })
+            
+    except Exception as e:
+        print(f"⚠️ DB Progress fetch failed: {e}")
+
+    # 3. Default
+    return jsonify({"status": "idle", "percent": 0, "message": "Waiting..."})
 
 
 def run_case_background_update(case_id):
@@ -901,12 +1000,34 @@ def import_cases():
         else:
             return jsonify({"error": "Invalid file type. Please upload .csv or .xlsx"}), 400
 
-        # Standardize column names (lower case, strip spaces)
-        df.columns = [c.lower().strip().replace(' ', '_') for c in df.columns]
+        # --- SMART COLUMN MAPPING ("Spelling Bee" Fix) ---
+        # 1. Normalize all existing columns to lower case stripped
+        df.columns = [str(c).lower().strip().replace(' ', '').replace('_', '') for c in df.columns]
+
+        # 2. Define acceptable variations
+        column_map = {
+            'case_name': ['casename', 'case', 'name', 'title', 'subject'],
+            'victim_name': ['victimname', 'victim', 'plaintiff'],
+            'suspect_name': ['suspectname', 'suspect', 'defendant', 'accused'],
+            'docket_url': ['docketurl', 'docket', 'url', 'link']
+        }
+
+        # 3. Rename columns based on map
+        new_columns = {}
+        for target_col, variations in column_map.items():
+            for col in df.columns:
+                if col in variations:
+                    new_columns[col] = target_col
+                    break # Take the first match
+        
+        df.rename(columns=new_columns, inplace=True)
+        
+        # Check if 'case_name' exists after remapping
+        if 'case_name' not in df.columns:
+            return jsonify({"error": f"Could not find a 'Case Name' column. Found: {list(df.columns)}"}), 400
 
         # Check if 'case_name' exists
-        if 'case_name' not in df.columns:
-            return jsonify({"error": "File must have a 'Case Name' column"}), 400
+
 
         # Loop through rows and add to Supabase
         imported_count = 0

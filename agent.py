@@ -59,18 +59,44 @@ def get_gemini_llm():
 
 # ==================== Node Functions ====================
 
-# Global Progress Tracker
+# Global Progress Tracker (Legacy Memory + DB Cache)
 PROGRESS = {}
 
+from db import update_case, get_supabase_client
+
 def update_progress(case_id, step, percent, message):
-    """Update the progress for a specific case."""
+    """
+    Update the progress for a specific case.
+    Persists to BOTH memory (fast access) and Database (resilience).
+    """
+    # 1. Update Memory
     if case_id:
-        PROGRESS[case_id] = {
+        status_payload = {
             "step": step,
             "percent": percent,
             "message": message,
             "status": "processing"
         }
+        if percent >= 100:
+            status_payload["status"] = "complete"
+            
+        PROGRESS[case_id] = status_payload
+
+        # 2. Update Database (Fire and Forget)
+        try:
+            # We map 'step' to 'processing_status' roughly, or just use 'processing'
+            db_status = "processing"
+            if percent >= 100:
+                db_status = "complete"
+            
+            update_case(case_id, {
+                "processing_status": db_status,
+                "progress_percent": percent,
+                "progress_message": message
+            })
+        except Exception as e:
+            # Don't crash the agent if DB update fails (e.g. column missing)
+            print(f"⚠️ Progress DB save failed: {e}")
 
 
 
@@ -301,43 +327,39 @@ def node_analyze(state: AgentState) -> AgentState:
 
 
 def node_decision(state: AgentState) -> Literal["node_search", "end"]:
-    """
-    Decision node: Determines whether to continue searching or end.
-    """
     verdict = state.get("final_verdict", {})
     search_attempts = state.get("search_attempts", 0)
     
-    next_hearing_date = verdict.get("next_hearing_date", "Unknown")
-    
-    # Check if we have a valid future date
-    if next_hearing_date and next_hearing_date != "Unknown":
+    # 1. GET DATA
+    status = verdict.get("case_status", "Unknown")
+    next_date = verdict.get("next_hearing_date", "Unknown")
+
+    # 2. CHECK IF CASE IS CLOSED (The Short Circuit)
+    # If the case is closed, we don't care about future dates. We accept the result.
+    if status in ["Closed", "Verdict Reached"]:
+        print(f"🛑 Case is {status}. Stopping research.")
+        return "end"
+
+    # 3. CHECK FOR VALID FUTURE DATE (Success)
+    if next_date and next_date != "Unknown":
         try:
-            # Try to parse the date
-            parsed_date = datetime.strptime(next_hearing_date, "%Y-%m-%d").date()
-            today = date.today()
-            
-            if parsed_date >= today:
-                print(f"✅ Valid future hearing date found: {next_hearing_date}")
+            parsed_date = datetime.strptime(next_date, "%Y-%m-%d").date()
+            if parsed_date >= date.today():
+                print(f"✅ Future hearing found: {next_date}")
                 return "end"
             else:
-                print(f"⚠️ Date found but it's in the past: {next_hearing_date} (Keeping it for reference)")
-                # We DO NOT return "Unknown" anymore. We keep the date.
-                pass
-                return "end"
+                # 4. HANDLE OLD DATES (The "Lazy AI" Fix)
+                print(f"⚠️ Date is in the past: {next_date}. Case is OPEN. Retrying...")
+                # Save the old date as history before retrying
+                verdict["last_hearing_date"] = next_date 
+                verdict["next_hearing_date"] = "Unknown"
         except ValueError:
-            # Invalid date format, treat as unknown
-            print(f"⚠️ Invalid date format: {next_hearing_date}")
-    
-    # Check if we should retry
-    if next_hearing_date == "Unknown" and search_attempts < 2:
+            pass # Invalid date format, treat as unknown
+
+    # 5. RETRY LOGIC (Only if Open & No Future Date)
+    if search_attempts < 2:
         print(f"🔄 Retrying search (attempt {search_attempts + 1}/2)")
         return "node_search"
-    
-    # Max attempts reached or other conditions
-    if search_attempts >= 2:
-        print("⚠️ Max search attempts reached. Marking for manual review.")
-        verdict["requires_manual_review"] = True
-        verdict["notes"] = f"{verdict.get('notes', '')} [Max search attempts reached]"
     
     return "end"
 

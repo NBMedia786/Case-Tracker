@@ -20,16 +20,8 @@ def scrape_with_god_mode(url):
     It handles the complex 'Async' stuff so your App doesn't crash.
     """
     try:
-        # Create a new event loop for this specific thread
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        # Run the crawler and wait for it to finish
-        markdown = loop.run_until_complete(run_crawler(url))
-        return markdown
+        # Use asyncio.run() which manages the loop lifecycle automatically and correctly
+        return asyncio.run(run_crawler(url))
     except Exception as e:
         print(f"❌ Searcher Crash: {e}")
         return None
-    finally:
-        if 'loop' in locals() and not loop.is_closed():
-            loop.close()
