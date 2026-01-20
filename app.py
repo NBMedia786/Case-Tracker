@@ -1062,7 +1062,7 @@ if __name__ == '__main__':
     
     # Run the Flask app
     debug_mode = os.getenv('FLASK_DEBUG', 'True').lower() == 'true'
-    port = int(os.getenv('PORT', 5000))
+    port = int(os.getenv('PORT', 3004))
     
     print(f"\n🚀 Starting Legal Case Tracking API on port {port}")
     app.run(debug=debug_mode, host='0.0.0.0', port=port, use_reloader=False)
