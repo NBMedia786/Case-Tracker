@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Legal Case Tracker</title>
+
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <style>
+        /* ================= THEME VARIABLES ================= */
+        :root {
+            /* Light Mode (Default) */
+            --primary-color: #0f172a;
+            /* Deep Navy */
+            --primary-hover: #1e293b;
+            --accent-blue: #2563eb;
+            /* Bright Blue */
+            --bg-body: #f8fafc;
+            /* Very Light Blue-Gray */
+            --bg-card: #ffffff;
+            --text-main: #334155;
+            --text-muted: #64748b;
+            --border-color: #e2e8f0;
+            --table-header-bg: #f1f5f9;
+            --row-hover: #f8fafc;
+
+            /* Status Colors */
+            --status-open-bg: #dbeafe;
+            --status-open-text: #1e40af;
+            --status-closed-bg: #fee2e2;
+            --status-closed-text: #991b1b;
+            --status-verdict-bg: #d1fae5;
+            --status-verdict-text: #065f46;
+            --warning-color: #d97706;
+
+            /* Shadows */
+            --shadow-card: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+            --modal-overlay: rgba(15, 23, 42, 0.4);
+        }
+
+        /* Dark Mode Overrides */
+        [data-theme="dark"] {
+            --primary-color: #f8fafc;
+            --primary-hover: #e2e8f0;
+            --accent-blue: #60a5fa;
+            --bg-body: #0f172a;
+            --bg-card: #1e293b;
+            --text-main: #cbd5e1;
+            --text-muted: #94a3b8;
+            --border-color: #334155;
+            --table-header-bg: #1e293b;
+            --row-hover: #263346;
+
+            --status-open-bg: rgba(30, 64, 175, 0.2);
+            --status-open-text: #93c5fd;
+            --status-closed-bg: rgba(153, 27, 27, 0.2);
+            --status-closed-text: #fca5a5;
+            --status-verdict-bg: rgba(6, 95, 70, 0.2);
+            --status-verdict-text: #6ee7b7;
+
+            --shadow-card: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+            --modal-overlay: rgba(0, 0, 0, 0.7);
+        }
+
+        /* ================= GLOBAL STYLES ================= */
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-body);
+            color: var(--text-main);
+            margin: 0;
+            padding: 0;
+            -webkit-font-smoothing: antialiased;
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+
+        /* --- THE FIX: WIDER CONTAINER --- */
+        .container {
+            max-width: 98%;
+            /* Was 1200px - Now fills the screen */
+            margin: 20px auto;
+            /* Reduced top margin */
+            padding: 0 20px;
+        }
+
+        /* Header Section */
+        .app-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding: 0 10px;
+        }
+
+        .app-title h1 {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--primary-color);
+            margin: 0;
+            letter-spacing: -0.5px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .app-title p {
+            color: var(--text-muted);
+            margin: 4px 0 0 0;
+            font-size: 13px;
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        /* Theme Toggle Button */
+        .theme-toggle-btn {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            width: 40px;
+            height: 40px;
+            cursor: pointer;
+            color: var(--text-muted);
+            font-size: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+
+        .theme-toggle-btn:hover {
+            border-color: var(--accent-blue);
+            color: var(--accent-blue);
+        }
+
+        /* Modern Buttons */
+        .btn {
+            padding: 10px 18px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border: 1px solid transparent;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            height: 40px;
+        }
+
+        .btn-primary {
+            background-color: var(--accent-blue);
+            color: white;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+        }
+
+        .btn-primary:hover {
+            background-color: #1d4ed8;
+            transform: translateY(-1px);
+        }
+
+        .btn-outline {
+            background-color: var(--bg-card);
+            border-color: var(--border-color);
+            color: var(--text-main);
+        }
+
+        .btn-outline:hover {
+            background-color: var(--bg-body);
+            border-color: var(--text-muted);
+        }
+
+        .btn-schedule {
+            background-color: var(--primary-color);
+            color: white;
+        }
+
+        .btn-schedule:hover {
+            opacity: 0.9;
+        }
+
+
+        /* Dashboard Card */
+        .dashboard-card {
+            background: var(--bg-card);
+            border-radius: 12px;
+            box-shadow: var(--shadow-card);
+            overflow: hidden;
+            /* Contains the table */
+            border: 1px solid var(--border-color);
+            transition: background-color 0.3s ease, border-color 0.3s ease;
+            min-height: 600px;
+            /* Force minimum height for look */
+        }
+
+        /* Data Table Styles */
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+        }
+
+        /* Sticky Header */
+        .data-table thead th {
+            background-color: var(--table-header-bg);
+            color: var(--text-muted);
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            padding: 16px 24px;
+            border-bottom: 1px solid var(--border-color);
+            position: sticky;
+            /* Keeps header visible */
+            top: 0;
+            z-index: 10;
+        }
+
+        .data-table tbody td {
+            padding: 16px 24px;
+            /* Slightly tighter padding */
+            border-bottom: 1px solid var(--border-color);
+            vertical-align: middle;
+        }
+
+        .data-table tbody tr:hover {
+            background-color: var(--row-hover);
+        }
+
+        /* Table Content Styling */
+        .case-info {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .case-title-link {
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--text-main);
+            text-decoration: none;
+            margin-bottom: 4px;
+            display: inline-block;
+        }
+
+        .case-title-link:hover {
+            color: var(--accent-blue);
+            text-decoration: underline;
+        }
+
+        .case-meta {
+            font-size: 13px;
+            color: var(--text-muted);
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .date-past {
+            color: var(--text-muted);
+            font-size: 14px;
+        }
+
+        .date-future {
+            color: var(--text-main);
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .date-warning {
+            color: var(--warning-color);
+            cursor: help;
+        }
+
+        /* Status Badges */
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            line-height: 1.4;
+        }
+
+        .badge-open {
+            background-color: var(--status-open-bg);
+            color: var(--status-open-text);
+        }
+
+        .badge-closed {
+            background-color: var(--status-closed-bg);
+            color: var(--status-closed-text);
+        }
+
+        .badge-verdict {
+            background-color: var(--status-verdict-bg);
+            color: var(--status-verdict-text);
+        }
+
+        /* Action Icons */
+        .action-icon-btn {
+            background: none;
+            border: 1px solid transparent;
+            cursor: pointer;
+            padding: 6px;
+            border-radius: 6px;
+            color: var(--text-muted);
+            transition: all 0.2s;
+            font-size: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .action-icon-btn:hover {
+            background-color: var(--bg-body);
+            color: var(--accent-blue);
+            border-color: var(--border-color);
+        }
+
+        .btn-delete-icon:hover {
+            background-color: #fee2e2;
+            color: #991b1b;
+            border-color: #fca5a5;
+        }
+
+        /* Modals (Popups) */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: var(--modal-overlay);
+            backdrop-filter: blur(3px);
+        }
+
+        .modal-content {
+            background-color: var(--bg-card);
+            margin: 6vh auto;
+            padding: 0;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 550px;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+            border: 1px solid var(--border-color);
+            animation: modalSlideIn 0.2s ease-out;
+        }
+
+        @keyframes modalSlideIn {
+            from {
+                transform: scale(0.95);
+                opacity: 0;
+            }
+
+            to {
+                transform: scale(1);
+                opacity: 1;
+            }
+        }
+
+        .modal-header {
+            padding: 16px 24px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background-color: var(--table-header-bg);
+            border-radius: 12px 12px 0 0;
+        }
+
+        .modal-header h2 {
+            margin: 0;
+            font-size: 18px;
+            color: var(--text-main);
+            font-weight: 600;
+        }
+
+        .close-btn {
+            font-size: 20px;
+            color: var(--text-muted);
+            cursor: pointer;
+            padding: 4px;
+            border-radius: 4px;
+        }
+
+        .close-btn:hover {
+            background-color: rgba(0, 0, 0, 0.05);
+            color: var(--text-main);
+        }
+
+        .modal-body {
+            padding: 24px;
+            font-size: 15px;
+            line-height: 1.6;
+            color: var(--text-main);
+            max-height: 70vh;
+            overflow-y: auto;
+        }
+
+        /* Forms */
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            font-size: 13px;
+            color: var(--text-main);
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            font-size: 14px;
+            font-family: 'Inter', sans-serif;
+            transition: border-color 0.2s;
+            background-color: var(--bg-card);
+            color: var(--text-main);
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="container">
+        <header class="app-header">
+            <div class="app-title">
+                <h1>⚖️ Legal Case Tracker</h1>
+                <p>Automated Case Monitoring & Docket Tracking</p>
+            </div>
+            <div class="header-actions">
+                <button class="theme-toggle-btn" onclick="toggleTheme()" title="Toggle Dark Mode">
+                    <span id="theme-icon">🌙</span>
+                </button>
+
+                <button id="btn-schedule" class="btn btn-schedule" onclick="openScheduleModal()" style="display:none;">
+                    Let's Schedule Selected
+                </button>
+
+                <button class="btn btn-outline" onclick="document.getElementById('importFile').click()">
+                    📂 Import Excel
+                </button>
+                <button class="btn btn-primary" onclick="toggleAddCaseForm()">
+                    + Add New Case
+                </button>
+                <input type="file" id="importFile" style="display:none" onchange="uploadCases()" accept=".csv, .xlsx">
+            </div>
+        </header>
+
+        <main class="dashboard-card">
+            <div style="overflow-x: auto;">
+                <table class="data-table" id="cases-table">
+                    <thead>
+                        <tr>
+                            <th width="4%">
+                                <input type="checkbox" id="master-checkbox" onclick="toggleAll(this)"
+                                    style="cursor:pointer;">
+                            </th>
+                            <th width="35%">Case Details</th>
+                            <th width="15%">Past Hearing</th>
+                            <th width="15%">Next Hearing</th>
+                            <th width="15%">Status</th>
+                            <th width="16%">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="cases-body">
+                    </tbody>
+                </table>
+            </div>
+            <div id="loading-indicator"
+                style="text-align: center; padding: 40px; color: var(--text-muted); display: none;">
+                Loading cases...
+            </div>
+            <div id="empty-state" style="text-align: center; padding: 60px; color: var(--text-muted); display: none;">
+                <div style="font-size: 48px; margin-bottom: 20px; opacity: 0.5;">🗂️</div>
+                <h3 style="margin:0; font-size: 18px; color: var(--text-main);">No Cases Tracked Yet</h3>
+                <p style="font-size: 14px; margin-top: 8px;">Import an Excel file or add a case manually to begin.</p>
+            </div>
+        </main>
+    </div>
+
+    <footer
+        style="text-align: center; padding: 20px 0 40px; color: var(--text-muted); font-size: 12px; font-weight: 500; opacity: 0.8;">
+        co-powered by NB-Media AI Team
+    </footer>
+
+    <div id="addCaseModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Add New Case</h2>
+                <span class="close-btn" onclick="toggleAddCaseForm()">&times;</span>
+            </div>
+            <div class="modal-body" id="addCaseFormBody">
+            </div>
+        </div>
+    </div>
+
+    <div id="summaryModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modalTitle">Case Details</h2>
+                <span class="close-btn" onclick="closeModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <p id="modalBody" style="white-space: pre-wrap; font-size: 14px; color: var(--text-main);"></p>
+            </div>
+        </div>
+    </div>
+
+    <div id="scheduleModal" class="modal">
+        <div class="modal-content" style="max-width: 450px;">
+            <div class="modal-header">
+                <h2>Schedule Auto-Update</h2>
+                <span class="close-btn"
+                    onclick="document.getElementById('scheduleModal').style.display='none'">&times;</span>
+            </div>
+            <div class="modal-body">
+                <p style="margin-bottom: 20px; color: var(--text-muted); font-size: 14px;">Select the date and time for
+                    the AI to automatically research the selected cases.</p>
+                <div class="form-group">
+                    <label class="form-label">Run Time:</label>
+                    <input type="datetime-local" id="schedule-time" class="form-input">
+                </div>
+                <div style="text-align:right; margin-top: 30px;">
+                    <button class="btn btn-outline"
+                        onclick="document.getElementById('scheduleModal').style.display='none'"
+                        style="margin-right: 10px;">Cancel</button>
+                    <button class="btn btn-primary" onclick="confirmSchedule()">Confirm Schedule</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
+    <script src="/static/js/api.js"></script>
+    <script src="/static/js/ui.js"></script>
+    <script src="/static/js/app.js"></script>
+
+    <script>
+        function toggleTheme() {
+            const html = document.documentElement;
+            const icon = document.getElementById('theme-icon');
+            const currentTheme = html.getAttribute('data-theme');
+
+            if (currentTheme === 'light') {
+                html.setAttribute('data-theme', 'dark');
+                icon.innerText = '☀️';
+                localStorage.setItem('theme', 'dark');
+            } else {
+                html.setAttribute('data-theme', 'light');
+                icon.innerText = '🌙';
+                localStorage.setItem('theme', 'light');
+            }
+        }
+
+        // Load saved theme on startup
+        (function () {
+            const savedTheme = localStorage.getItem('theme') || 'light';
+            document.documentElement.setAttribute('data-theme', savedTheme);
+            document.getElementById('theme-icon').innerText = savedTheme === 'dark' ? '☀️' : '🌙';
+        })();
+    </script>
+</body>
+
+</html>

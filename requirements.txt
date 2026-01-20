@@ -1,0 +1,17 @@
+flask
+flask-cors
+supabase
+langchain
+langgraph
+langchain-google-genai
+google-search-results
+apscheduler
+python-dotenv
+beautifulsoup4
+lxml
+requests
+pandas
+openpyxl
+crawl4ai
+nest_asyncio
+playwright
