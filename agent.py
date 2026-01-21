@@ -245,7 +245,7 @@ def node_analyze(state: AgentState) -> AgentState:
 {search_results}
 
 === SCRAPED WEB CONTENT ===
-{scraped_data[:15000]}  # Limit to avoid token overflow
+{scraped_data}  # ✅ FIX: Send EVERYTHING. Gemini can handle it.
 """
  
         messages = [
