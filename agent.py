@@ -131,7 +131,8 @@ def node_search(state: AgentState) -> AgentState:
         if search_attempts == 0:
             query = f"latest court hearing {case_name}"
         elif search_attempts == 1:
-            query = f"docket schedule {case_name} official record"
+            # ✅ FIX: Add "court calendar" to find exact dates
+            query = f"court calendar {case_name} hearing date"
         else:
             query = f"court case status {case_name}"
         
@@ -145,7 +146,7 @@ def node_search(state: AgentState) -> AgentState:
         scraped_data = ""
         
         if urls:
-            target_urls = urls[:2] # Limit to top 2
+            target_urls = urls[:5]  # ✅ FIX: Read top 5 results to catch buried dates
             print(f"🚀 Engaging God Mode (Searcher) for {len(target_urls)} URLs...")
             
             update_progress(case_id, "search", 45 + (search_attempts * 10), f"Reading {len(target_urls)} Sources...")
