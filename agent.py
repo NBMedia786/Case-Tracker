@@ -10,14 +10,12 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from tools import search_web, get_search_urls
-# Import your new local browser engine
-from searcher import scrape_with_god_mode
+from searcher import scrape_with_god_mode, scrape_multiple_with_god_mode
+import dateutil.parser
 
-# Load environment variables
 load_dotenv()
 
 
-# ==================== State Definition ====================
 
 class AgentState(TypedDict):
     """
@@ -41,7 +39,6 @@ class AgentState(TypedDict):
     case_id: Optional[int]
 
 
-# ==================== LLM Initialization ====================
 
 def get_gemini_llm():
     """Initialize and return the Gemini 2.5 Pro model."""
@@ -57,9 +54,7 @@ def get_gemini_llm():
     )
 
 
-# ==================== Node Functions ====================
 
-# Global Progress Tracker (Legacy Memory + DB Cache)
 PROGRESS = {}
 
 from db import update_case, get_supabase_client
@@ -69,7 +64,6 @@ def update_progress(case_id, step, percent, message):
     Update the progress for a specific case.
     Persists to BOTH memory (fast access) and Database (resilience).
     """
-    # 1. Update Memory
     if case_id:
         status_payload = {
             "step": step,
@@ -82,9 +76,7 @@ def update_progress(case_id, step, percent, message):
             
         PROGRESS[case_id] = status_payload
 
-        # 2. Update Database (Fire and Forget)
         try:
-            # We map 'step' to 'processing_status' roughly, or just use 'processing'
             db_status = "processing"
             if percent >= 100:
                 db_status = "complete"
@@ -95,7 +87,6 @@ def update_progress(case_id, step, percent, message):
                 "progress_message": message
             })
         except Exception as e:
-            # Don't crash the agent if DB update fails (e.g. column missing)
             print(f"⚠️ Progress DB save failed: {e}")
 
 
@@ -113,12 +104,10 @@ def node_search(state: AgentState) -> AgentState:
 
     update_progress(case_id, "search", 20 + (search_attempts * 10), f"Searching: Attempt {search_attempts + 1}")
 
-    # --- STRATEGY 1: DIRECT DOCKET SCRAPE (Attempt 0) ---
     if search_attempts == 0 and docket_url:
         print(f"🔗 Checking Official Docket URL: {docket_url}")
         update_progress(case_id, "search", 25, "Accessing Official Docket...")
         try:
-            # Use God Mode directly on the target
             scraped_content = scrape_with_god_mode(docket_url)
 
             if scraped_content:
@@ -132,14 +121,11 @@ def node_search(state: AgentState) -> AgentState:
                 }
             else:
                 print("❌ Official docket scrape returned empty. Falling back to search.")
-                # Fall through to Google Search logic below (but increment attempt so we don't loop)
                 search_attempts += 1 
         except Exception as e:
             print(f"❌ Docket scrape failed: {e}")
             search_attempts += 1 
 
-    # --- STRATEGY 2: GOOGLE SEARCH (Fallback) ---
-    # If we are here, either Docket URL was missing, failed, or we are on retry loops
     try:
         update_progress(case_id, "search", 30 + (search_attempts * 10), "Running Google Search...")
         if search_attempts == 0:
@@ -151,32 +137,31 @@ def node_search(state: AgentState) -> AgentState:
         
         print(f"🔍 Search attempt {search_attempts + 1} (Google): '{query}'")
         
-        # Perform search
         search_results = search_web.invoke({"query": query})
         
         update_progress(case_id, "search", 40 + (search_attempts * 10), "Scanning Search Results...")
 
-        # Get URLs and scrape content
         urls = get_search_urls(query)
         scraped_data = ""
         
         if urls:
-            # Scrape top 2 to save time if falling back
+            target_urls = urls[:2] # Limit to top 2
+            print(f"🚀 Engaging God Mode (Searcher) for {len(target_urls)} URLs...")
+            
+            update_progress(case_id, "search", 45 + (search_attempts * 10), f"Reading {len(target_urls)} Sources...")
+            
+            batch_results = scrape_multiple_with_god_mode(target_urls)
+            
             scraped_parts = []
-            for i, search_url in enumerate(urls[:2]):
-                update_progress(case_id, "search", 45 + (i * 5) + (search_attempts * 10), f"Reading Source {i+1}...")
-                print(f"🚀 Engaging God Mode (Searcher) for: {search_url}")
-                page_content = scrape_with_god_mode(search_url)
-                
-                if page_content:
-                    print(f"✅ Downloaded {len(page_content)} characters of clean Markdown.")
-                    scraped_parts.append(f"## Web Source: {search_url}\n\n{page_content[:5000]}") # Limit per source
+            for url, content in batch_results.items():
+                if content:
+                    print(f"✅ Downloaded {len(content)} characters from {url}")
+                    scraped_parts.append(f"## Web Source: {url}\n\n{content[:5000]}")
                 else:
-                    print("❌ Scrape failed. Skipping this source.")
+                     print(f"❌ Scrape failed for {url}")
             
             scraped_data = "\n\n---\n\n".join(scraped_parts)
         
-        # Combine previous scraped data with new data
         previous_data = state.get("scraped_data", "")
         combined_data = f"{previous_data}\n\n--- Search Attempt {search_attempts + 1} ---\n\n{scraped_data}"
         
@@ -270,23 +255,19 @@ def node_analyze(state: AgentState) -> AgentState:
         response = llm.invoke(messages)
         response_text = response.content.strip()
         
-        # Extract JSON from response (handle markdown code blocks)
         json_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', response_text)
         if json_match:
             response_text = json_match.group(1)
         
-        # Parse the JSON response
         try:
             verdict = json.loads(response_text)
         except json.JSONDecodeError:
-            # Try to extract JSON object from text
             json_match = re.search(r'\{[\s\S]*\}', response_text)
             if json_match:
                 verdict = json.loads(json_match.group())
             else:
                 raise ValueError("Could not parse JSON from response")
         
-        # Validate and normalize the verdict
         verdict = {
             "next_hearing_date": verdict.get("next_hearing_date", "Unknown"),
             "last_hearing_date": verdict.get("last_hearing_date", "Unknown"),
@@ -297,6 +278,42 @@ def node_analyze(state: AgentState) -> AgentState:
             "notes": verdict.get("notes", ""),
             "requires_manual_review": verdict.get("requires_manual_review", False)
         }
+
+        # ✅ FIX: Status Normalization (Vocabulary Mismatch)
+        raw_status = verdict.get("case_status", "Unknown")
+        status_map = {
+            "Dismissed": "Closed",
+            "Settled": "Closed",
+            "Adjudicated": "Verdict Reached",
+            "Sentenced": "Verdict Reached",
+            "Stayed": "Open",
+            "Adjourned": "Open", 
+            "Active": "Open",
+            "Pending": "Open" 
+        }
+
+        # If exact match fails, check the map
+        if raw_status not in ["Open", "Closed", "Verdict Reached", "Unknown"]:
+             # Try direct map
+            mapped = status_map.get(raw_status)
+            if not mapped:
+                # Try case insensitive
+                for key, val in status_map.items():
+                    if key.lower() in raw_status.lower():
+                        mapped = val
+                        break
+            
+            if mapped:
+                print(f"🔄 Normalized Status: '{raw_status}' -> '{mapped}'")
+                verdict["case_status"] = mapped
+            else:
+                # If still unknown but suggests closure
+                if any(x in raw_status.lower() for x in ['close', 'end', 'finish']):
+                    verdict["case_status"] = "Closed"
+                else:
+                    verdict["case_status"] = "Open" # Default fallback safety
+
+        
         
         print(f"📋 Analysis complete: {json.dumps(verdict, indent=2)}")
         
@@ -330,33 +347,35 @@ def node_decision(state: AgentState) -> Literal["node_search", "end"]:
     verdict = state.get("final_verdict", {})
     search_attempts = state.get("search_attempts", 0)
     
-    # 1. GET DATA
     status = verdict.get("case_status", "Unknown")
     next_date = verdict.get("next_hearing_date", "Unknown")
 
-    # 2. CHECK IF CASE IS CLOSED (The Short Circuit)
-    # If the case is closed, we don't care about future dates. We accept the result.
     if status in ["Closed", "Verdict Reached"]:
         print(f"🛑 Case is {status}. Stopping research.")
         return "end"
 
-    # 3. CHECK FOR VALID FUTURE DATE (Success)
     if next_date and next_date != "Unknown":
         try:
+            # Try standard format first
             parsed_date = datetime.strptime(next_date, "%Y-%m-%d").date()
+        except ValueError:
+            try:
+                # Fallback for other formats
+                parsed_date = dateutil.parser.parse(next_date).date()
+            except:
+                parsed_date = None
+
+        if parsed_date:
             if parsed_date >= date.today():
-                print(f"✅ Future hearing found: {next_date}")
+                print(f"✅ Future hearing found: {next_date} (parsed as {parsed_date})")
                 return "end"
             else:
-                # 4. HANDLE OLD DATES (The "Lazy AI" Fix)
-                print(f"⚠️ Date is in the past: {next_date}. Case is OPEN. Retrying...")
-                # Save the old date as history before retrying
+                print(f"⚠️ Date is in the past: {next_date} (parsed as {parsed_date}). Case is OPEN. Retrying...")
                 verdict["last_hearing_date"] = next_date 
                 verdict["next_hearing_date"] = "Unknown"
-        except ValueError:
-            pass # Invalid date format, treat as unknown
+        else:
+            print(f"⚠️ Could not parse date: {next_date}")
 
-    # 5. RETRY LOGIC (Only if Open & No Future Date)
     if search_attempts < 2:
         print(f"🔄 Retrying search (attempt {search_attempts + 1}/2)")
         return "node_search"
@@ -364,7 +383,6 @@ def node_decision(state: AgentState) -> Literal["node_search", "end"]:
     return "end"
 
 
-# ==================== Graph Construction ====================
 
 def build_research_agent():
     """Build and compile the LangGraph research agent."""
@@ -382,7 +400,6 @@ def build_research_agent():
 research_agent = build_research_agent()
 
 
-# ==================== Public API ====================
 
 def research_case(case_name: str, docket_url: Optional[str] = None, case_id: Optional[int] = None) -> dict:
     """
@@ -394,7 +411,6 @@ def research_case(case_name: str, docket_url: Optional[str] = None, case_id: Opt
         print(f"🔗 Docket URL provided: {docket_url}")
     print(f"{'='*60}\n")
     
-    # Initialize Progress
     update_progress(case_id, "start", 5, "Initializing Agent...")
 
     initial_state: AgentState = {
@@ -408,7 +424,6 @@ def research_case(case_name: str, docket_url: Optional[str] = None, case_id: Opt
         "error_message": ""
     }
     
-    # Run the agent
     final_state = research_agent.invoke(initial_state)
     
     update_progress(case_id, "complete", 100, "Research Complete!")
@@ -425,7 +440,6 @@ def research_case(case_name: str, docket_url: Optional[str] = None, case_id: Opt
     }
 
 
-# ==================== CLI for Testing ====================
 
 if __name__ == "__main__":
     import sys
@@ -444,6 +458,5 @@ if __name__ == "__main__":
     print("\n📊 Final Result:")
     print(json.dumps(result, indent=2, default=str))
 
-# Alias for compatibility
 def process_case(case_name, docket_url=None, case_id=None):
     return research_case(case_name, docket_url, case_id)

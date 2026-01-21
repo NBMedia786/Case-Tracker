@@ -3,11 +3,9 @@
  * Entry point that ties together API and UI components.
  */
 
-// ==================== App State ====================
 window.cases = []; // Expose globally for UI helper access if needed
 let isLoading = false;
 
-// ==================== Core Functions ====================
 
 /**
  * Sync cases from server and update UI.
@@ -16,7 +14,6 @@ async function syncWithServer() {
     if (isLoading) return;
     isLoading = true;
 
-    // Show loading state (simple text update or spinner if UI supports it)
     const tbody = document.getElementById('cases-body');
     if (tbody && window.cases.length === 0) {
         tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; padding: 20px;">Loading cases...</td></tr>';
@@ -26,7 +23,6 @@ async function syncWithServer() {
         const casesData = await getCases(); // From api.js
         window.cases = casesData;
 
-        // Render using ui.js function
         if (window.renderCases) {
             window.renderCases(window.cases);
         } else {
@@ -48,12 +44,9 @@ async function syncWithServer() {
  * Called by UI form submission.
  */
 async function addCaseWrapper(caseData) {
-    // Call api.js functions
     const result = await apiAddCase(caseData);
-    // Show toast is handled by ui.js logic often, but we can do it here
     if (window.showToast) window.showToast('Case added successfully!', 'success');
 
-    // IMMEDIATE REFRESH FIX
     await syncWithServer();
 
     return result;
@@ -93,7 +86,6 @@ async function deleteCaseWrapper(caseId) {
     }
 }
 
-// ==================== Expose Globally for HTML/UI ====================
 window.syncWithServer = syncWithServer;
 window.triggerUpdate = triggerUpdate;
 window.deleteCase = deleteCaseWrapper;
@@ -101,12 +93,9 @@ window.addCase = addCaseWrapper; // For UI to call
 window.scheduleCustomCheck = scheduleCustomCheck; // Direct exposure from api.js namespace
 window.getCaseProgress = getCaseProgress;
 
-// ==================== App Initialization ====================
 
 function initApp() {
-    // Initial data load
     syncWithServer();
 }
 
-// Start App when DOM is ready
 document.addEventListener('DOMContentLoaded', initApp);

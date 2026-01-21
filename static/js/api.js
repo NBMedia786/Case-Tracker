@@ -186,7 +186,6 @@ async function getCaseProgress(caseId) {
     return result;
 }
 
-// Export for use in other modules
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         getCases,

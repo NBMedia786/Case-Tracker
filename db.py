@@ -2,14 +2,11 @@ import os
 from supabase import create_client, Client
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 
-# Supabase configuration
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-# Global Supabase client
 supabase: Client = None
 
 
@@ -60,19 +57,13 @@ def init_db() -> bool:
     try:
         client = get_supabase_client()
         
-        # Check if the 'cases' table exists by attempting to query it
         try:
             response = client.table("cases").select("id").limit(1).execute()
             print("✓ 'cases' table already exists.")
             return True
         except Exception as table_error:
-            # Table doesn't exist, attempt to create it
             print("'cases' table not found. Attempting to create...")
             
-            # SQL to create the cases table
-            # Note: Supabase Python client doesn't directly support raw SQL execution.
-            # For self-hosted Supabase, you should run this migration manually in the SQL editor
-            # or use the Supabase Management API.
             
             create_table_sql = """
             CREATE TABLE IF NOT EXISTS cases (
@@ -87,6 +78,9 @@ def init_db() -> bool:
                 status TEXT DEFAULT 'Open' CHECK (status IN ('Open', 'Closed', 'Verdict Reached')),
                 notes TEXT,
                 confidence TEXT DEFAULT 'high',
+                processing_status TEXT DEFAULT 'idle',
+                progress_percent INT DEFAULT 0,
+                progress_message TEXT DEFAULT '',
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
                 updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
             );
@@ -98,13 +92,11 @@ def init_db() -> bool:
             CREATE INDEX IF NOT EXISTS idx_cases_next_hearing ON cases(next_hearing_date);
             """
             
-            # Try using RPC if available (requires a function to be set up in Supabase)
             try:
                 client.rpc("exec_sql", {"query": create_table_sql}).execute()
                 print("✓ 'cases' table created successfully via RPC.")
                 return True
             except Exception as rpc_error:
-                # RPC not available, provide manual instructions
                 print("\n" + "=" * 60)
                 print("MANUAL TABLE CREATION REQUIRED")
                 print("=" * 60)
@@ -113,7 +105,6 @@ def init_db() -> bool:
                 print(create_table_sql)
                 print("=" * 60 + "\n")
                 
-                # Return False to indicate manual intervention needed
                 return False
                 
     except ValueError as ve:
@@ -162,6 +153,13 @@ def create_case(case_data: dict):
         dict: The created case record.
     """
     client = get_supabase_client()
+    
+    # Check if exists
+    existing = client.table("cases").select("id").eq("case_name", case_data["case_name"]).execute()
+    if existing.data:
+        print(f"⚠️ Case '{case_data['case_name']}' already exists. Skipping creation.")
+        return existing.data[0] # Return existing instead of creating duplicate
+
     response = client.table("cases").insert(case_data).execute()
     return response.data[0] if response.data else None
 

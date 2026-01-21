@@ -5,10 +5,8 @@ from langchain.tools import tool
 from dotenv import load_dotenv
 from searcher import scrape_with_god_mode
 
-# Load environment variables
 load_dotenv()
 
-# API Keys
 SERPER_API_KEY = os.getenv("SERPER_API_KEY")
 
 
@@ -44,13 +42,11 @@ def search_web(query: str) -> str:
         
         data = response.json()
         
-        # Extract organic search results
         results = data.get("organic", [])
         
         if not results:
             return f"No search results found for query: '{query}'"
         
-        # Format the results
         formatted_results = []
         for i, result in enumerate(results[:5], 1):
             title = result.get("title", "No title")
@@ -94,10 +90,8 @@ def scrape_content(urls: List[str]) -> str:
     
     for url in urls:
         try:
-            # Call God Mode
             content = scrape_with_god_mode(url)
             
-            # Limit content to 5000 characters
             if len(content) > 5000:
                 content = content[:5000] + "\n\n[...content truncated at 5000 characters...]"
             
@@ -108,7 +102,6 @@ def scrape_content(urls: List[str]) -> str:
     return "\n---\n\n".join(results)
 
 
-# ==================== Utility Functions ====================
 
 def get_search_urls(query: str) -> List[str]:
     """
@@ -164,7 +157,6 @@ def search_and_scrape(query: str) -> str:
     if not urls:
         return f"No search results found for: {query}"
     
-    # Scrape the top 3 URLs to limit token usage
     scraped = scrape_content.invoke({"urls": urls[:3]})
     
     return f"**Research Results for '{query}':**\n\n{scraped}"

@@ -1,22 +1,16 @@
 
 let selectedCases = new Set();
 
-// ===========================
-// MAIN RENDER FUNCTION
-// ===========================
 function renderCases(cases) {
     const tbody = document.getElementById('cases-body');
     const loading = document.getElementById('loading-indicator');
     const empty = document.getElementById('empty-state');
     const table = document.getElementById('cases-table');
 
-    // Clear current view
     tbody.innerHTML = '';
 
-    // Reset Loading State
     if (loading) loading.style.display = 'none';
 
-    // Handle Empty State
     if (!cases || cases.length === 0) {
         if (table) table.style.display = 'none';
         if (empty) empty.style.display = 'block';
@@ -26,31 +20,26 @@ function renderCases(cases) {
         if (empty) empty.style.display = 'none';
     }
 
-    // Reset selection state on re-render
     selectedCases.clear();
     const masterCheckbox = document.getElementById('master-checkbox');
     if (masterCheckbox) masterCheckbox.checked = false;
     updateScheduleButton();
 
-    // Render Rows
     cases.forEach(c => {
         tbody.appendChild(createCaseRow(c));
     });
 
-    // Resume Progress for active cases
     cases.forEach(c => {
-        if (c.processing_status === 'processing') {
+        if (c.processing_status === 'processing' || c.processing_status === 'queued') {
             resumeProgressWrapper(c.id);
         }
     });
 }
 
-// Helper to create a single professional row
 function createCaseRow(c) {
     const row = document.createElement('tr');
     row.id = `row-${c.id}`; // Add ID for easy access
 
-    // --- 1. Status Logic ---
     const status = (c.status || 'Open').toLowerCase();
     let badgeClass = 'badge-open';
     if (status === 'closed') badgeClass = 'badge-closed';
@@ -59,20 +48,15 @@ function createCaseRow(c) {
     const isClosed = status === 'closed' || status === 'verdict reached';
     const statusBadge = `<span class="status-badge ${badgeClass}">${escapeHtml(c.status || 'Open')}</span>`;
 
-    // --- 2. Date Logic (The Fix) ---
-    // Past Date (History)
     const lastDateHtml = (c.last_hearing_date && c.last_hearing_date !== 'Unknown')
         ? `<span class="date-past">${c.last_hearing_date}</span>`
         : `<span style="color: var(--text-muted); opacity: 0.5;">--</span>`;
 
-    // Next Date Logic
     let nextDateHtml;
 
     if (isClosed) {
-        // IF CLOSED: Explicit text instead of dash
         nextDateHtml = '<span style="color: var(--text-muted); font-style: italic; font-size: 13px;">Case Closed</span>';
     } else {
-        // IF OPEN: Show Date or Unknown
         const rawNext = c.next_hearing_date && c.next_hearing_date !== 'Unknown' ? c.next_hearing_date : null;
 
         if (rawNext) {
@@ -81,23 +65,19 @@ function createCaseRow(c) {
             nextDateHtml = '<span style="color: var(--text-muted)">Unknown</span>';
         }
 
-        // Add Warning if Low Confidence (Only for active cases)
         if ((c.confidence || 'high').toLowerCase() === 'low') {
             nextDateHtml += ` <span style="cursor:help" title="AI Confidence: LOW. Please verify manually.">⚠️</span>`;
         }
     }
 
-    // --- 3. Meta Data (Victim/Suspect) ---
     const metaInfo = [];
     if (c.victim_name) metaInfo.push(`Victim: ${escapeHtml(c.victim_name)}`);
     if (c.suspect_name) metaInfo.push(`Suspect: ${escapeHtml(c.suspect_name)}`);
     const metaHtml = metaInfo.length > 0 ? metaInfo.join(' • ') : '';
 
-    // --- 4. Link Icon (if docket URL exists) ---
     const linkIcon = c.docket_url ? `<span title="Official Docket URL Available" style="color: var(--accent-blue); font-size: 14px;"> 🔗</span>` : '';
 
 
-    // --- Row HTML Structure ---
     row.innerHTML = `
         <td style="text-align:center;">
             <input type="checkbox" class="case-checkbox" value="${c.id}" onchange="toggleCaseSelection(${c.id}, this)" style="cursor:pointer; transform: scale(1.1);">
@@ -133,7 +113,6 @@ function createCaseRow(c) {
     return row;
 }
 
-// Wrapper to resume progress on page load
 function resumeProgressWrapper(id) {
     const row = document.getElementById(`row-${id}`);
     if (!row) return;
@@ -141,23 +120,19 @@ function resumeProgressWrapper(id) {
     const actionCell = row.querySelector('.action-cell');
     if (!actionCell) return;
 
-    // Replace content with progress bar
     renderProgressUI(actionCell, id, 0, "Resuming...");
     startProgressPolling(id, actionCell);
 }
 
-// Wrapper to show loading state on click
 async function triggerUpdateWrapper(id, btnElement) {
     if (btnElement.disabled) return;
     btnElement.disabled = true;
 
     const parentTd = btnElement.closest('td');
 
-    // 1. Initial UI
     renderProgressUI(parentTd, id, 0, "Starting...");
 
     try {
-        // 2. Trigger API
         if (typeof window.triggerResearch === 'function') {
             await window.triggerResearch(id);
         } else if (typeof triggerResearch === 'function') {
@@ -166,7 +141,6 @@ async function triggerUpdateWrapper(id, btnElement) {
             await fetch(`/api/trigger_update/${id}`, { method: 'POST' });
         }
 
-        // 3. Start Polling
         startProgressPolling(id, parentTd);
 
     } catch (e) {
@@ -176,7 +150,6 @@ async function triggerUpdateWrapper(id, btnElement) {
     }
 }
 
-// Helper: Render the Progress Bar HTML
 function renderProgressUI(container, id, percent, message) {
     const progressId = `progress-${id}`;
     container.innerHTML = `
@@ -189,13 +162,11 @@ function renderProgressUI(container, id, percent, message) {
     `;
 }
 
-// Helper: Poll Logic
 function startProgressPolling(id, container) {
     const progressId = `progress-${id}`;
 
     const intervalId = setInterval(async () => {
         try {
-            // Fetch/Get status
             let progress;
             if (typeof window.getCaseProgress === 'function') {
                 progress = await window.getCaseProgress(id);
@@ -206,17 +177,14 @@ function startProgressPolling(id, container) {
                 progress = await res.json();
             }
 
-            // Update UI
             const bar = document.getElementById(`${progressId}-bar`);
             const text = document.getElementById(`${progressId}-text`);
 
             if (bar && text) {
                 const percent = progress.percent || 0;
                 bar.style.width = `${percent}%`;
-                // If resuming, we might have a message from DB
                 text.innerText = progress.message ? `(${percent}%) ${progress.message}` : `${percent}%`;
 
-                // Completion
                 if (percent >= 100 || progress.status === 'complete') {
                     clearInterval(intervalId);
                     text.innerText = "Done!";
@@ -225,7 +193,6 @@ function startProgressPolling(id, container) {
                     }, 1000);
                 }
             } else {
-                // Element lost
                 clearInterval(intervalId);
             }
 
@@ -235,9 +202,6 @@ function startProgressPolling(id, container) {
     }, 1000);
 }
 
-// ===========================
-// MODAL & FORM FUNCTIONS
-// ===========================
 
 function toggleAddCaseForm() {
     const modal = document.getElementById('addCaseModal');
@@ -332,9 +296,6 @@ function createProfessionalForm() {
     return formContainer;
 }
 
-// ===========================
-// SCHEDULING & SELECTION
-// ===========================
 
 function toggleCaseSelection(id, checkbox) {
     if (checkbox.checked) selectedCases.add(id);
@@ -388,7 +349,6 @@ async function confirmSchedule() {
 
     try {
         if (typeof window.scheduleCustomCheck !== 'function') {
-            // Fallback if not defined globally yet (safety)
             const response = await fetch('/api/schedule_custom_check', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -423,9 +383,6 @@ function handleScheduleSuccess() {
     updateScheduleButton();
 }
 
-// ===========================
-// UTILS
-// ===========================
 function escapeHtml(unsafe) {
     if (unsafe === null || unsafe === undefined) return '';
     return unsafe
@@ -437,7 +394,6 @@ function escapeHtml(unsafe) {
 }
 
 function openModal(caseId) {
-    // We access the global window.cases array populated by app.js/api.js
     const casesList = window.cases || [];
     const caseData = casesList.find(c => c.id === caseId);
 
@@ -453,7 +409,6 @@ function closeModal() {
     document.getElementById('summaryModal').style.display = "none";
 }
 
-// Close modals on outside click
 window.onclick = function (event) {
     if (event.target.classList.contains('modal')) {
         event.target.style.display = "none";
