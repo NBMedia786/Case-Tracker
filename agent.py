@@ -131,8 +131,8 @@ def node_search(state: AgentState) -> AgentState:
         if search_attempts == 0:
             query = f"latest court hearing {case_name}"
         elif search_attempts == 1:
-            # ✅ FIX: Add "court calendar" to find exact dates
-            query = f"court calendar {case_name} hearing date"
+            # ✅ FIX: Ask for news articles which are text-based (PDFs often unreadable)
+            query = f"latest news article {case_name} court hearing date"
         else:
             query = f"court case status {case_name}"
         

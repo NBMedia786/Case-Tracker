@@ -5,19 +5,25 @@ async def run_crawler(url):
     """
     The asynchronous core that launches the browser (Playwright) via Crawl4AI.
     """
-    # ✅ FIX: Skip PDFs to prevent "1 character" errors
+    # ✅ STRATEGY 1: If it's a PDF, try to handle it (Simple version)
     if url.lower().endswith('.pdf'):
-        print(f"⚠️ Skipping PDF: {url}")
-        return ""
-    
+        print(f"📄 PDF Detected: {url}")
+        # Allow Crawl4AI to TRY reading it by removing the 'return ""' line
+        # If Crawl4AI fails, we will catch it in the try/except block below.
+        pass 
+
     async with AsyncWebCrawler(verbose=True) as crawler:
-        result = await crawler.arun(
-            url=url,
-            bypass_cache=True,  # Always get fresh data
-            magic=True,         # Handles popups/cookie banners automatically
-            word_count_threshold=10  # Ignores tiny useless text
-        )
-        return result.markdown
+        try:
+            result = await crawler.arun(
+                url=url,
+                bypass_cache=True,
+                magic=True,  # This often helps with simple PDFs
+                word_count_threshold=10
+            )
+            return result.markdown
+        except Exception as e:
+            print(f"⚠️ Failed to scrape {url}: {e}")
+            return ""  # Return empty only if it actually fails
 
 
 async def run_crawler_batch(urls):

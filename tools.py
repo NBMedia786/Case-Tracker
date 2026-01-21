@@ -13,13 +13,13 @@ SERPER_API_KEY = os.getenv("SERPER_API_KEY")
 @tool
 def search_web(query: str) -> str:
     """
-    Search the web using Serper API (Google Search) and return top 5 results.
+    Search the web using Serper API (Google Search) and return top 10 results.
     
     Args:
         query: The search query string to look up on Google.
     
     Returns:
-        A formatted string containing the top 5 search results with URLs and snippets.
+        A formatted string containing the top 10 search results with URLs and snippets.
     """
     if not SERPER_API_KEY:
         return "Error: SERPER_API_KEY environment variable is not set."
@@ -34,7 +34,7 @@ def search_web(query: str) -> str:
         
         payload = {
             "q": query,
-            "num": 5  # Request top 5 results
+            "num": 10  # ✅ CHANGE: Request top 10 results for better coverage
         }
         
         response = requests.post(url, json=payload, headers=headers, timeout=30)
@@ -48,7 +48,7 @@ def search_web(query: str) -> str:
             return f"No search results found for query: '{query}'"
         
         formatted_results = []
-        for i, result in enumerate(results[:5], 1):
+        for i, result in enumerate(results[:10], 1):
             title = result.get("title", "No title")
             link = result.get("link", "No URL")
             snippet = result.get("snippet", "No description available")
@@ -127,7 +127,7 @@ def get_search_urls(query: str) -> List[str]:
         
         payload = {
             "q": query,
-            "num": 5
+            "num": 10  # ✅ CHANGE: Request top 10 results
         }
         
         response = requests.post(url, json=payload, headers=headers, timeout=30)
@@ -136,7 +136,7 @@ def get_search_urls(query: str) -> List[str]:
         data = response.json()
         results = data.get("organic", [])
         
-        return [result.get("link") for result in results[:5] if result.get("link")]
+        return [result.get("link") for result in results[:10] if result.get("link")]
     
     except Exception:
         return []
