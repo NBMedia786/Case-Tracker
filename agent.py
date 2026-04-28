@@ -41,16 +41,24 @@ class AgentState(TypedDict):
 
 
 def get_gemini_llm():
-    """Initialize and return the Gemini 2.5 Pro model."""
-    api_key = os.getenv("GOOGLE_API_KEY")
+    """Initialize and return the Gemini 2.5 Pro model.
+
+    Auth precedence: VERTEX_API_KEY -> GEMINI_API_KEY -> GOOGLE_API_KEY.
+    """
+    api_key = (
+        os.getenv("VERTEX_API_KEY")
+        or os.getenv("GEMINI_API_KEY")
+        or os.getenv("GOOGLE_API_KEY")
+    )
+
     if not api_key:
-        raise ValueError("GOOGLE_API_KEY environment variable is not set.")
-    
+        raise ValueError("No API key set. Provide VERTEX_API_KEY (or GEMINI_API_KEY / GOOGLE_API_KEY).")
+
     return ChatGoogleGenerativeAI(
         model="gemini-2.5-pro",
         google_api_key=api_key,
-        temperature=0.1,  # Low temperature for more deterministic extraction
-        convert_system_message_to_human=True
+        temperature=0.1,
+        convert_system_message_to_human=True,
     )
 
 
